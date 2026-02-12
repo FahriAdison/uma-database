@@ -115,6 +115,11 @@ export function getAllSupportCards() {
   return supportCardDatabase;
 }
 
+export function getRandomSupportCard() {
+  if (!supportCardDatabase.length) return null;
+  return supportCardDatabase[Math.floor(Math.random() * supportCardDatabase.length)];
+}
+
 export function getSupportCardById(supportId) {
   const id = Number(supportId);
   return supportCardDatabase.find((card) => card.supportId === id) || null;

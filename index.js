@@ -15,6 +15,7 @@ export {
   supportCardDatabase,
   supportCardStats,
   getAllSupportCards,
+  getRandomSupportCard,
   getSupportCardById,
   getSupportCardByUrlName,
   getSupportCardsByType,
