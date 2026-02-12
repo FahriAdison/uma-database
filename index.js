@@ -43,3 +43,6 @@ export {
   getCharacterMoviesById as apiGetCharacterMoviesById,
   getCurrentBirthdays as apiGetCurrentBirthdays
 } from "./umapyoiApi.js";
+
+export { default as trainingCommand, configureTrainingCore } from "./training-core.js";
+export { default as gachaCommand, configureGachaCore } from "./gacha-core.js";
