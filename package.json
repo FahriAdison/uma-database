@@ -1,0 +1,13 @@
+{
+  "name": "@fahri/uma-database",
+  "version": "1.0.0",
+  "description": "Uma Musume character database for gacha system",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": ["uma", "musume", "gacha", "database"],
+  "author": "FahriAdison",
+  "license": "MIT"
+}
