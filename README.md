@@ -1,6 +1,13 @@
 # @fahri/uma-database
 Uma Musume data and command cores for Node.js / WhatsApp bot projects.
 
+<p align="center">
+  <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcStsyWjFo9JUe-FnQ_YGlzuMm7CU4FxmfEvsMlfEZEkxQ&s=10" alt="Papah-Chan Icon" width="140" />
+</p>
+<p align="center">
+  <marquee behavior="alternate" scrollamount="6">this module database made by Papah-Chan</marquee>
+</p>
+
 ## What This Package Contains
 - Character cache + helper queries.
 - Support card cache + helper queries.
@@ -90,6 +97,8 @@ export default {
 Do the same pattern for `gachaCommand`.
 
 ## Notes
-- Data source: Umapyoi (`https://umapyoi.net/api/v1`).
+- Data source:
+  - Umapyoi API (`https://umapyoi.net/api/v1`)
+  - GameTora web data (fetched/scraped from page payload/HTML in command core flows)
 - This package does not manage your bot local DB by default; pass adapters with `configureTrainingCore` / `configureGachaCore`.
-- Social feed notifier (`socialfeed`) is part of your bot app layer, not this package core.
+- `socialfeed` notifier is not part of this module package. Keep it in your bot app layer (`commands/` + `lib/` in bot repo).
