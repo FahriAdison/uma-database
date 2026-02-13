@@ -1,40 +1,45 @@
-# uma-database
-Database Uma Musume Game for WhatsApp bot using JavaScript.
+# @fahri/uma-database
+Uma Musume data and command cores for Node.js / WhatsApp bot projects.
 
-## Available API
+## What This Package Contains
+- Character cache + helper queries.
+- Support card cache + helper queries.
+- Umapyoi live API wrappers.
+- `training-core` command module (large training system logic).
+- `gacha-core` command module (uma/support gacha logic).
 
-Character API (cache in-memory, refreshed from Umapyoi at startup):
+This package is designed so your bot repo can keep command files thin while heavy game logic lives here.
+
+## Exports
+### Character
+- `refreshUmaDatabase()`
 - `getRandomUma()`
+- `getSSRarityUmas()`
 - `getUmaById(id)`
 - `getAllUmas()`
-- `getSSRarityUmas()`
-- `refreshUmaDatabase()`
+- `getAllUmasFromApi()`
+- `getUmaByIdFromApi(charaId)`
+- `getRandomUmaFromApi()`
 
-Support Card API (cache in-memory, refreshed from Umapyoi at startup):
+### Support Card
+- `refreshSupportCardDatabase()`
 - `getAllSupportCards()`
+- `getRandomSupportCard()`
 - `getSupportCardById(supportId)`
 - `getSupportCardByUrlName(urlName)`
 - `getSupportCardsByType(type)`
 - `getSupportCardsByCharacter(query)`
 - `getLatestSupportCards(limit)`
-- `refreshSupportCardDatabase()`
+- `getRarityLabel(rarityCode)`
+- `getAllSupportCardsFromApi()`
+- `getSupportCardByIdFromApi(supportId)`
+- `getSupportCardsByCharacterFromApi(charaId)`
 
-This repository now includes the first support card entry:
-- `30286-matikanefukukitaru` (SSR Speed, release `2026-01-30`)
-
-## Umapyoi Live API (Recommended)
-
-This package now includes async wrappers for the official Umapyoi API docs:
-- Docs: `https://umapyoi.net/docs/index.html`
-- Base URL: `https://umapyoi.net/api/v1`
-
-Support endpoints:
+### Umapyoi API Wrapper
+- `createUmapyoiClient({ baseUrl, timeoutMs })`
 - `apiGetSupportCards()`
 - `apiGetSupportCardById(supportId)`
 - `apiGetSupportCardsByCharacter(charaId)`
-- `getSupportGameToraEndpoint(supportId)`
-
-Character endpoints:
 - `apiGetCharacters()`
 - `apiGetCharacterInfoList()`
 - `apiGetCharacterList()`
@@ -42,17 +47,49 @@ Character endpoints:
 - `apiGetCharacterImagesById(charaId)`
 - `apiGetCharacterMoviesById(charaId)`
 - `apiGetCurrentBirthdays()`
+- `getSupportGameToraEndpoint(supportId)`
 
-Client factory:
-- `createUmapyoiClient({ baseUrl, timeoutMs })`
+### Command Cores
+- `trainingCommand`
+- `configureTrainingCore(config)`
+- `gachaCommand`
+- `configureGachaCore(config)`
 
-Example:
+## Basic Usage
 ```js
-import { apiGetSupportCardById, apiGetSupportCardsByCharacter } from "@fahri/uma-database";
+import {
+  refreshUmaDatabase,
+  refreshSupportCardDatabase,
+  getRandomUma,
+  apiGetSupportCardById
+} from "@fahri/uma-database";
 
-const card = await apiGetSupportCardById(30286);
-const fukukitaruSupports = await apiGetSupportCardsByCharacter(1056);
+await refreshUmaDatabase();
+await refreshSupportCardDatabase();
 
-console.log(card);
-console.log(fukukitaruSupports.length);
+const uma = getRandomUma();
+const support = await apiGetSupportCardById(30001);
+
+console.log(uma?.name, support?.title_en || support?.title);
 ```
+
+## Using Command Cores In Bot Repo
+Example bridge command file in your bot project:
+
+```js
+import { getGacha, setGacha } from '../../database/index.js';
+import { trainingCommand, configureTrainingCore } from '@fahri/uma-database';
+
+configureTrainingCore({ getGacha, setGacha });
+
+export default {
+  ...trainingCommand
+};
+```
+
+Do the same pattern for `gachaCommand`.
+
+## Notes
+- Data source: Umapyoi (`https://umapyoi.net/api/v1`).
+- This package does not manage your bot local DB by default; pass adapters with `configureTrainingCore` / `configureGachaCore`.
+- Social feed notifier (`socialfeed`) is part of your bot app layer, not this package core.
