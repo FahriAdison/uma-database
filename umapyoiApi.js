@@ -94,7 +94,8 @@ export function createUmapyoiClient(config = {}) {
     getCharacterById: (charaId) => getCharacterById(charaId, options),
     getCharacterImagesById: (charaId) => getCharacterImagesById(charaId, options),
     getCharacterMoviesById: (charaId) => getCharacterMoviesById(charaId, options),
-    getCurrentBirthdays: () => getCurrentBirthdays(options)
+    getCurrentBirthdays: () => getCurrentBirthdays(options),
+    getOutfitList: () => getOutfitList(options)
   };
 }
 
@@ -164,4 +165,8 @@ export async function getCharacterMoviesById(charaId, options = {}) {
 
 export async function getCurrentBirthdays(options = {}) {
   return requestJson("character/currentbirthdays", options);
+}
+
+export async function getOutfitList(options = {}) {
+  return requestJson("outfit", options);
 }
