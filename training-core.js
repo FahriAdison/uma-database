@@ -94,6 +94,8 @@ const CONDITION_META = {
     skillPointMult: 1.2
   }
 };
+const PHARMACY_BASE_SUCCESS = 0.72;
+const PHARMACY_ENERGY_COST = 6;
 
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
@@ -888,6 +890,11 @@ function maybeRecoverCondition(run, kind) {
   return `Condition recovered: ${CONDITION_META[target]?.name || target}`;
 }
 
+function getBlueConditions(run) {
+  ensureConditionState(run);
+  return run.conditions.filter((c) => CONDITION_META[c]?.type === 'blue');
+}
+
 async function maybeTriggerTurnEvent(run) {
   const eventLines = [];
 
@@ -960,6 +967,7 @@ async function showHelp(sock, jid, msg) {
     '- !training goals <uma id|name>\n' +
     '- !training status\n' +
     '- !training train <speed|stamina|power|guts|wit|rest>\n' +
+    '- !training farmasi\n' +
     '- !training outing\n' +
     '- !training race (goal race)\n' +
     '- !training race free (non-goal race, farm fans)\n' +
@@ -1351,6 +1359,63 @@ async function doOuting(sock, remoteJid, senderJid, gachaData, msg) {
   }, { quoted: msg });
 }
 
+async function doPharmacy(sock, remoteJid, senderJid, gachaData, msg) {
+  const training = getOrInitTraining(gachaData);
+  const run = training.activeRun;
+  if (!run) return sock.sendMessage(remoteJid, { text: 'Belum ada training aktif.' }, { quoted: msg });
+  if (run.failed) return sock.sendMessage(remoteJid, { text: 'Run ini sudah gagal. Pakai !training finish untuk menutup run.' }, { quoted: msg });
+  if (run.turn > MAX_TURN) return sock.sendMessage(remoteJid, { text: 'Turn training sudah habis. Pakai !training finish.' }, { quoted: msg });
+
+  const blueList = getBlueConditions(run);
+  if (!blueList.length) {
+    return sock.sendMessage(remoteJid, {
+      text:
+        '*Farmasi*\n' +
+        'Tidak ada kondisi biru yang perlu diobati.\n' +
+        `Condition saat ini: ${listConditionText(run)}`
+    }, { quoted: msg });
+  }
+
+  const beforeMood = run.mood;
+  run.energy = clamp(run.energy - PHARMACY_ENERGY_COST, 0, 100);
+  const successChance = clamp(PHARMACY_BASE_SUCCESS + (run.energy < 40 ? 0.08 : 0), 0.55, 0.9);
+  const success = Math.random() < successChance;
+
+  let resultLine;
+  if (success) {
+    const cured = pick(blueList);
+    removeCondition(run, cured);
+    resultLine = `Berhasil mengobati: ${CONDITION_META[cured]?.name || cured}`;
+  } else {
+    resultLine = 'Farmasi belum berhasil menyembuhkan kondisi.';
+  }
+
+  if (!success && Math.random() < 0.1) {
+    run.mood = shiftMood(run.mood, -1);
+  }
+
+  const fanGoalLine = checkFanGoalProgress(run);
+  const currentGoal = nextGoal(run);
+  if (!fanGoalLine && currentGoal && currentGoal.goalType === 'fans' && run.turn >= currentGoal.turn && !currentGoal.cleared) {
+    run.failed = true;
+    run.failedReason = `Fans ${formatNum(run.fans || 0)}/${formatNum(currentGoal.fansRequired || 0)} di turn ${currentGoal.turn}`;
+  }
+
+  run.turn += 1;
+  setGacha(senderJid, gachaData);
+
+  return sock.sendMessage(remoteJid, {
+    text:
+      '*Farmasi*\n' +
+      `${resultLine}\n` +
+      `Energy: ${run.energy}/100 (-${PHARMACY_ENERGY_COST})\n` +
+      `Mood: ${MOOD_LABEL[beforeMood]} -> ${MOOD_LABEL[run.mood]}\n` +
+      `Condition: ${listConditionText(run)}\n` +
+      `${fanGoalLine ? `${fanGoalLine}\n` : ''}` +
+      `Turn sekarang: ${run.turn}/${MAX_TURN}`
+  }, { quoted: msg });
+}
+
 async function showSkills(sock, remoteJid, gachaData, msg) {
   const run = getOrInitTraining(gachaData).activeRun;
   if (!run) return sock.sendMessage(remoteJid, { text: 'Belum ada training aktif.' }, { quoted: msg });
@@ -1514,13 +1579,14 @@ async function handle(sock, remoteJid, args, msg) {
   if (sub === 'goals') return showGoals(sock, remoteJid, gachaData, args.slice(1), msg);
   if (sub === 'status') return showStatus(sock, remoteJid, gachaData, msg);
   if (sub === 'train') return doTrain(sock, remoteJid, senderJid, gachaData, args.slice(1), msg);
+  if (sub === 'farmasi' || sub === 'pharmacy' || sub === 'clinic') return doPharmacy(sock, remoteJid, senderJid, gachaData, msg);
   if (sub === 'outing') return doOuting(sock, remoteJid, senderJid, gachaData, msg);
   if (sub === 'race') return doRace(sock, remoteJid, senderJid, gachaData, args.slice(1), msg);
   if (sub === 'skills') return showSkills(sock, remoteJid, gachaData, msg);
   if (sub === 'buy') return buySkill(sock, remoteJid, senderJid, gachaData, args.slice(1), msg);
   if (sub === 'finish') return finishRun(sock, remoteJid, senderJid, gachaData, msg);
 
-  return sock.sendMessage(remoteJid, { text: 'Subcommand training tidak dikenal. Coba: help, deck, start, goals, status, train, outing, skills, buy, race, finish' }, { quoted: msg });
+  return sock.sendMessage(remoteJid, { text: 'Subcommand training tidak dikenal. Coba: help, deck, start, goals, status, train, farmasi, outing, skills, buy, race, finish' }, { quoted: msg });
 }
 
 export default {
