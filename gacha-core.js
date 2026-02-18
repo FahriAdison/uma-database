@@ -32,6 +32,27 @@ const SUPPORT_MULTI_GUARANTEE_SRPLUS_RATES = {
 };
 const SUPPORT_PITY_THRESHOLD = 100;
 const SUPPORT_MAX_LIMIT_BREAK = 4;
+const UMA_BASE_STAR_BY_RARITY = {
+  A: 1,
+  S: 2,
+  SS: 3
+};
+const UMA_STAR_UP_PIECE_COST = {
+  1: 50,
+  2: 100,
+  3: 200,
+  4: 300
+};
+const UMA_DUPLICATE_PIECE_GAIN = {
+  A: 10,
+  S: 20,
+  SS: 40
+};
+const SUPPORT_OVERFLOW_SELL_VALUE = {
+  R: 5,
+  SR: 30,
+  SSR: 120
+};
 
 const EMOJI = {
   gacha: '\u{1F3B0}',
@@ -88,6 +109,74 @@ function normalizeUmaRarity(value) {
   const rarity = value.toUpperCase().trim();
   if (rarity === 'SS' || rarity === 'S' || rarity === 'A') return rarity;
   return 'A';
+}
+
+function getUmaBaseStar(rarity) {
+  const key = normalizeUmaRarity(rarity);
+  return UMA_BASE_STAR_BY_RARITY[key] || 1;
+}
+
+function clampUmaStar(star, rarity) {
+  const base = getUmaBaseStar(rarity);
+  const n = Math.floor(Number(star) || base);
+  if (n < base) return base;
+  if (n > 5) return 5;
+  return n;
+}
+
+function getUmaStarUpCost(currentStar) {
+  return UMA_STAR_UP_PIECE_COST[Math.floor(Number(currentStar) || 0)] || 0;
+}
+
+function getUmaDuplicatePieceGain(rarity) {
+  const key = normalizeUmaRarity(rarity);
+  return UMA_DUPLICATE_PIECE_GAIN[key] || UMA_DUPLICATE_PIECE_GAIN.A;
+}
+
+function normalizeCounterMap(mapObj) {
+  if (!mapObj || typeof mapObj !== 'object' || Array.isArray(mapObj)) return {};
+  return Object.fromEntries(
+    Object.entries(mapObj)
+      .map(([k, v]) => [String(k), Math.max(0, Math.floor(Number(v) || 0))])
+      .filter(([, v]) => v > 0)
+  );
+}
+
+function getCounter(mapObj, key) {
+  if (!mapObj || typeof mapObj !== 'object') return 0;
+  return Math.max(0, Math.floor(Number(mapObj[key]) || 0));
+}
+
+function setCounter(mapObj, key, value) {
+  if (!mapObj || typeof mapObj !== 'object') return;
+  const n = Math.max(0, Math.floor(Number(value) || 0));
+  if (n <= 0) delete mapObj[key];
+  else mapObj[key] = n;
+}
+
+function addCounter(mapObj, key, delta) {
+  const next = getCounter(mapObj, key) + Math.max(0, Math.floor(Number(delta) || 0));
+  setCounter(mapObj, key, next);
+  return next;
+}
+
+function tryAutoStarUpUma(gachaData, umaItem) {
+  if (!gachaData || !umaItem || umaItem.id === undefined || umaItem.id === null) return [];
+  const idKey = String(umaItem.id);
+  const upgrades = [];
+
+  umaItem.star = clampUmaStar(umaItem.star, umaItem.rarity);
+  while (umaItem.star < 5) {
+    const cost = getUmaStarUpCost(umaItem.star);
+    if (!cost) break;
+    const pieces = getCounter(gachaData.fragments, idKey);
+    if (pieces < cost) break;
+    setCounter(gachaData.fragments, idKey, pieces - cost);
+    umaItem.star += 1;
+    upgrades.push({ star: umaItem.star, cost });
+  }
+
+  return upgrades;
 }
 
 function rarityRank(order, rarity) {
@@ -349,19 +438,19 @@ function sanitizeUmaInventory(inventory) {
     if (!name) continue;
 
     const idKey = String(item.id).trim().toLowerCase();
-    const levelNum = Number(item.level);
     const countNum = Number(item.count);
+    const normalizedRarity = rarityById.get(idKey) || normalizeUmaRarity(item.rarity);
     const normalized = {
       id: item.id,
       name,
-      rarity: rarityById.get(idKey) || normalizeUmaRarity(item.rarity),
+      rarity: normalizedRarity,
       emoji: typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji : EMOJI.star,
       charaId: Number.isInteger(Number(item.charaId)) ? Number(item.charaId) : null,
       cardId: Number.isInteger(Number(item.cardId)) ? Number(item.cardId) : null,
       outfitName: typeof item.outfitName === 'string' && item.outfitName.trim() ? item.outfitName.trim() : null,
       imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : null,
       pulledAt: Number(item.pulledAt) || Date.now(),
-      level: Number.isFinite(levelNum) && levelNum > 0 ? Math.floor(levelNum) : 1,
+      star: clampUmaStar(item.star, normalizedRarity),
       count: Number.isFinite(countNum) && countNum > 0 ? Math.floor(countNum) : 1
     };
 
@@ -372,13 +461,14 @@ function sanitizeUmaInventory(inventory) {
 
     const prev = merged.get(idKey);
     prev.count = (Number(prev.count) || 1) + (Number(normalized.count) || 1);
-    prev.level = Math.max(Number(prev.level) || 1, Number(normalized.level) || 1);
+    prev.star = Math.max(clampUmaStar(prev.star, prev.rarity), clampUmaStar(normalized.star, normalized.rarity));
     prev.pulledAt = Math.max(Number(prev.pulledAt) || 0, Number(normalized.pulledAt) || 0);
     if (!prev.imageUrl && normalized.imageUrl) prev.imageUrl = normalized.imageUrl;
     if (!prev.outfitName && normalized.outfitName) prev.outfitName = normalized.outfitName;
     if (!prev.charaId && normalized.charaId) prev.charaId = normalized.charaId;
     if (!prev.cardId && normalized.cardId) prev.cardId = normalized.cardId;
     prev.rarity = rarityById.get(idKey) || prev.rarity || normalized.rarity;
+    prev.star = clampUmaStar(prev.star, prev.rarity);
   }
 
   return [...merged.values()];
@@ -393,7 +483,6 @@ function sanitizeSupportInventory(inventory) {
     const name = typeof item.name === 'string' ? item.name.trim() : '';
     if (!name) continue;
     const rarity = normalizeSupportRarity(item.rarity);
-    const levelNum = Number(item.level);
     const countNum = Number(item.count);
     const lbNum = Number(item.limitBreak ?? item.lb);
     const idKey = String(item.id).trim();
@@ -411,7 +500,6 @@ function sanitizeSupportInventory(inventory) {
       limitBreak: Number.isFinite(lbNum) && lbNum > 0 ? Math.min(SUPPORT_MAX_LIMIT_BREAK, Math.floor(lbNum)) : 0,
       emoji: typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji : supportEmojiByRarity(rarity),
       pulledAt: Number(item.pulledAt) || Date.now(),
-      level: Number.isFinite(levelNum) && levelNum > 0 ? Math.floor(levelNum) : 1,
       count: Number.isFinite(countNum) && countNum > 0 ? Math.floor(countNum) : 1
     };
 
@@ -422,7 +510,6 @@ function sanitizeSupportInventory(inventory) {
 
     const prev = merged.get(idKey);
     prev.count = (Number(prev.count) || 1) + (Number(normalized.count) || 1);
-    prev.level = Math.max(Number(prev.level) || 1, Number(normalized.level) || 1);
     prev.limitBreak = Math.max(Number(prev.limitBreak) || 0, Number(normalized.limitBreak) || 0);
     prev.pulledAt = Math.max(Number(prev.pulledAt) || 0, Number(normalized.pulledAt) || 0);
     if (!prev.imageUrl && normalized.imageUrl) prev.imageUrl = normalized.imageUrl;
@@ -514,6 +601,11 @@ function ensureGachaShape(gachaData) {
 
   gachaData.inventory = sanitizeUmaInventory(gachaData.inventory);
   gachaData.supportInventory = sanitizeSupportInventory(gachaData.supportInventory);
+  gachaData.fragments = normalizeCounterMap(gachaData.fragments);
+  gachaData.supportFragments = normalizeCounterMap(gachaData.supportFragments);
+  for (const uma of gachaData.inventory) {
+    tryAutoStarUpUma(gachaData, uma);
+  }
   gachaData.carrots = Number(gachaData.carrots) || 1000;
   gachaData.pulls = Number(gachaData.pulls) || 0;
   gachaData.supportPulls = Number(gachaData.supportPulls) || 0;
@@ -643,11 +735,12 @@ async function handle(sock, remoteJid, args, msg) {
         `- !gacha support 1x - Pull 1x support card\n` +
         `- !gacha support 10x - Pull 10x support card\n` +
         `- !gacha support inventory [page] - Koleksi support card\n` +
+        `- !gacha support sell <id|all> - Jual dupe overflow (LB max)\n` +
         `- !gacha support stats - Statistik support gacha\n` +
         `\nDrop rate support 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
         `Drop rate support 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
         `10x guarantee: minimal 1 SR+ per multi.\n` +
-        `Pity support: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR\n`
+        `Shared pity support (1x + 10x): SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR\n`
     }, { quoted: msg });
   }
 
@@ -691,11 +784,12 @@ async function handleSupportCommand(sock, remoteJid, jid, supportArgs, gachaData
         `- !gacha support 1x\n` +
         `- !gacha support 10x\n` +
         `- !gacha support inventory [page]\n` +
+        `- !gacha support sell <id|all>\n` +
         `- !gacha support stats\n` +
         `\nDrop rate 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
         `Drop rate 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
         `10x guarantee: minimal 1 SR+ per multi.\n` +
-        `Pity: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR`
+        `Shared pity (1x + 10x): SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR`
     }, { quoted: msg });
   }
 
@@ -706,11 +800,13 @@ async function handleSupportCommand(sock, remoteJid, jid, supportArgs, gachaData
       return handleSupportMulti(sock, remoteJid, jid, gachaData, msg);
     case 'inventory':
       return handleSupportInventory(sock, remoteJid, jid, gachaData, supportArgs.slice(1), msg);
+    case 'sell':
+      return handleSupportSell(sock, remoteJid, jid, gachaData, supportArgs.slice(1), msg);
     case 'stats':
       return handleSupportStats(sock, remoteJid, jid, gachaData, msg);
     default:
       return sock.sendMessage(remoteJid, {
-        text: 'Subcommand support tidak dikenal. Gunakan: 1x, 10x, inventory, stats'
+        text: 'Subcommand support tidak dikenal. Gunakan: 1x, 10x, inventory, sell, stats'
       }, { quoted: msg });
   }
 }
@@ -781,27 +877,37 @@ async function handleGachaSingle(sock, remoteJid, jid, gachaData, msg) {
 
   const existing = findOwnedItem(gachaData.inventory, uma.id);
   let resultMsg;
+  const umaRarity = normalizeUmaRarity(uma.rarity);
 
   if (existing) {
     existing.count = (existing.count || 1) + 1;
-    gachaData.fragments[uma.id] = (gachaData.fragments[uma.id] || 0) + 1;
-    resultMsg = `${EMOJI.duplicate} *Duplicate!* Converted to piece.\n${uma.emoji || EMOJI.star} ${uma.name} Piece +1\n`;
+    const gain = getUmaDuplicatePieceGain(existing.rarity || umaRarity);
+    addCounter(gachaData.fragments, String(uma.id), gain);
+    const upgrades = tryAutoStarUpUma(gachaData, existing);
+    const piecesAfter = getCounter(gachaData.fragments, String(uma.id));
+    const upText = upgrades.length
+      ? `\nStar Up: ${upgrades.map((u) => `\u2605${u.star}`).join(' -> ')}`
+      : '';
+    resultMsg =
+      `${EMOJI.duplicate} *Duplicate!* Converted to piece.\n` +
+      `${uma.emoji || EMOJI.star} ${uma.name} Piece +${gain} (sisa ${piecesAfter})${upText}\n`;
   } else {
     const cardId = getUmaCardId(uma);
+    const baseStar = getUmaBaseStar(umaRarity);
     gachaData.inventory.push({
       id: uma.id,
       name: uma.name,
-      rarity: normalizeUmaRarity(uma.rarity),
+      rarity: umaRarity,
       emoji: uma.emoji || EMOJI.star,
       charaId: Number.isInteger(resolvedCharaId) ? resolvedCharaId : null,
       cardId: Number.isInteger(cardId) ? cardId : null,
       outfitName: umaImageMeta?.outfitName || null,
       imageUrl: finalUmaImageUrl,
       pulledAt: Date.now(),
-      level: 1,
+      star: baseStar,
       count: 1
     });
-    resultMsg = `${EMOJI.new} *New Uma!*\n${uma.emoji || EMOJI.star} *${uma.name}* [${normalizeUmaRarity(uma.rarity)}]${outfitText}\n`;
+    resultMsg = `${EMOJI.new} *New Uma!*\n${uma.emoji || EMOJI.star} *${uma.name}* [${umaRarity}] \u2605${baseStar}${outfitText}\n`;
   }
 
   gachaData.pulls += 1;
@@ -855,28 +961,34 @@ async function handleGachaMulti(sock, remoteJid, jid, gachaData, msg) {
     const existing = findOwnedItem(gachaData.inventory, uma.id);
     const resolvedCharaId = getUmaCharaId(uma);
     const resolvedCardId = getUmaCardId(uma);
+    const umaRarity = normalizeUmaRarity(uma.rarity);
 
     if (existing) {
       existing.count = (existing.count || 1) + 1;
       if (!existing.charaId && Number.isInteger(resolvedCharaId)) existing.charaId = resolvedCharaId;
       if (!existing.cardId && Number.isInteger(resolvedCardId)) existing.cardId = resolvedCardId;
-      gachaData.fragments[uma.id] = (gachaData.fragments[uma.id] || 0) + 1;
-      pullResults += `${i + 1}. ${uma.emoji || EMOJI.star} ${uma.name} (Piece +1)\n`;
+      const gain = getUmaDuplicatePieceGain(existing.rarity || umaRarity);
+      addCounter(gachaData.fragments, String(uma.id), gain);
+      const upgrades = tryAutoStarUpUma(gachaData, existing);
+      const piecesAfter = getCounter(gachaData.fragments, String(uma.id));
+      const upText = upgrades.length ? ` | StarUp ${upgrades.map((u) => `\u2605${u.star}`).join('->')}` : '';
+      pullResults += `${i + 1}. ${uma.emoji || EMOJI.star} ${uma.name} (Piece +${gain}, sisa ${piecesAfter}${upText})\n`;
     } else {
+      const baseStar = getUmaBaseStar(umaRarity);
       gachaData.inventory.push({
         id: uma.id,
         name: uma.name,
-        rarity: normalizeUmaRarity(uma.rarity),
+        rarity: umaRarity,
         emoji: uma.emoji || EMOJI.star,
         charaId: Number.isInteger(resolvedCharaId) ? resolvedCharaId : null,
         cardId: Number.isInteger(resolvedCardId) ? resolvedCardId : null,
         imageUrl: getUmaImageUrl(uma),
         pulledAt: Date.now(),
-        level: 1,
+        star: baseStar,
         count: 1
       });
       newUmas.push(uma);
-      pullResults += `${i + 1}. ${uma.emoji || EMOJI.star} *${uma.name}* [${normalizeUmaRarity(uma.rarity)}]\n`;
+      pullResults += `${i + 1}. ${uma.emoji || EMOJI.star} *${uma.name}* [${umaRarity}] \u2605${baseStar}\n`;
     }
 
     gachaData.history.push({ uma: uma.id, time: Date.now(), count: 1 });
@@ -944,15 +1056,14 @@ async function handleSupportSingle(sock, remoteJid, jid, gachaData, msg) {
       existing.limitBreak += 1;
       resultMsg = `${EMOJI.duplicate} *Duplicate Support!*\n${card.emoji} ${card.name} Limit Break naik ke LB${existing.limitBreak}\n`;
     } else {
-      gachaData.supportFragments[card.id] = (gachaData.supportFragments[card.id] || 0) + 1;
-      resultMsg = `${EMOJI.duplicate} *Duplicate Support!* (MLB)\n${card.emoji} ${card.name} Fragment +1\n`;
+      const spare = addCounter(gachaData.supportFragments, String(card.id), 1);
+      resultMsg = `${EMOJI.duplicate} *Duplicate Support!* (MLB)\n${card.emoji} ${card.name} Stok dupe +1 (total ${spare})\n`;
     }
   } else {
     gachaData.supportInventory.push({
       ...card,
       limitBreak: 0,
       pulledAt: Date.now(),
-      level: 1,
       count: 1
     });
     resultMsg = `${EMOJI.new} *New Support Card!*\n${card.emoji} *${card.name}* [${card.rarity}]${supportMetaText(card)} [LB0]\n`;
@@ -975,7 +1086,7 @@ async function handleSupportSingle(sock, remoteJid, jid, gachaData, msg) {
     `\n-${CARROT_PRICES.single} ${EMOJI.carrot}\n` +
     `Sisa: ${formatCurrency(gachaData.carrots)} ${EMOJI.carrot}\n` +
     `Total Pull: ${gachaData.supportPulls}\n` +
-    `Pity: ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`;
+    `Shared Pity (1x+10x): ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`;
 
   const imageUrl = card.imageUrl || getSupportCardImageUrl(card.id);
   return sendWithImageFallback(sock, remoteJid, imageUrl, caption, msg);
@@ -1025,6 +1136,12 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
     } else {
       card = pullSupportCardByRate(false, 'multi');
     }
+    if (i === 9 && !hasSrOrAbove && card && card.rarity === 'R') {
+      const forcedSrPlus =
+        pickSupportCardFromPoolByRarity('SR', { allowAnyFallback: false }) ||
+        pickSupportCardFromPoolByRarity('SSR', { allowAnyFallback: false });
+      if (forcedSrPlus) card = forcedSrPlus;
+    }
     if (!card) {
       return sock.sendMessage(remoteJid, {
         text: `${EMOJI.warning} *Pull Gagal*\n\nData support card tidak valid saat proses 10x.`
@@ -1040,15 +1157,14 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
         existing.limitBreak += 1;
         pullResults += `${i + 1}. ${card.emoji} ${card.name} [${card.rarity}]${guaranteedSSR ? ' [PITY]' : ''} (LB${existing.limitBreak})\n`;
       } else {
-        gachaData.supportFragments[card.id] = (gachaData.supportFragments[card.id] || 0) + 1;
-        pullResults += `${i + 1}. ${card.emoji} ${card.name} [${card.rarity}]${guaranteedSSR ? ' [PITY]' : ''} (Fragment)\n`;
+        const spare = addCounter(gachaData.supportFragments, String(card.id), 1);
+        pullResults += `${i + 1}. ${card.emoji} ${card.name} [${card.rarity}]${guaranteedSSR ? ' [PITY]' : ''} (Spare +1, total ${spare})\n`;
       }
     } else {
       gachaData.supportInventory.push({
         ...card,
         limitBreak: 0,
         pulledAt: Date.now(),
-        level: 1,
         count: 1
       });
       newCards.push(card);
@@ -1074,8 +1190,9 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
       `Sisa: ${formatCurrency(gachaData.carrots)} ${EMOJI.carrot}\n` +
       `Total Pull: ${gachaData.supportPulls}\n` +
       `New Cards: ${newCards.length}\n` +
+      `Guarantee Slot 10 (SR+): ON\n` +
       `Pity Triggered: ${pityTriggered}x\n` +
-      `Pity: ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`
+      `Shared Pity (1x+10x): ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`
   }, { quoted: msg });
 }
 
@@ -1106,8 +1223,9 @@ function handleInventory(sock, remoteJid, jid, gachaData, args, msg) {
     `*${EMOJI.inventory} Koleksi Umamu ${EMOJI.inventory}*\n` +
     `Page ${page}/${totalPages}\n\n`;
   slice.forEach((u, idx) => {
-    const frag = gachaData.fragments[u.id] || 0;
-    inv += `${start + idx + 1}. ${u.emoji} ${u.name} [${u.rarity}] Lv${u.level}${frag > 0 ? ` +${frag}P` : ''}\n`;
+    const frag = getCounter(gachaData.fragments, String(u.id));
+    const star = clampUmaStar(u.star, u.rarity);
+    inv += `${start + idx + 1}. ${u.emoji} ${u.name} [${u.rarity}] \u2605${star}${frag > 0 ? ` | Piece ${frag}` : ''}\n`;
   });
   inv += `\n*${EMOJI.total} Total: ${cleanedInventory.length} unique umas*\n`;
   inv += `Ketik: !gacha inventory <page>`;
@@ -1122,16 +1240,8 @@ function handleCleanup(sock, remoteJid, jid, gachaData, msg) {
 
   gachaData.inventory = sanitizeUmaInventory(gachaData.inventory);
   gachaData.supportInventory = sanitizeSupportInventory(gachaData.supportInventory);
-  gachaData.fragments = Object.fromEntries(
-    Object.entries(gachaData.fragments || {})
-      .map(([k, v]) => [String(k), Math.max(0, Math.floor(Number(v) || 0))])
-      .filter(([, v]) => v > 0)
-  );
-  gachaData.supportFragments = Object.fromEntries(
-    Object.entries(gachaData.supportFragments || {})
-      .map(([k, v]) => [String(k), Math.max(0, Math.floor(Number(v) || 0))])
-      .filter(([, v]) => v > 0)
-  );
+  gachaData.fragments = normalizeCounterMap(gachaData.fragments);
+  gachaData.supportFragments = normalizeCounterMap(gachaData.supportFragments);
 
   setGacha(jid, gachaData);
 
@@ -1141,7 +1251,7 @@ function handleCleanup(sock, remoteJid, jid, gachaData, msg) {
       `Uma inventory: ${beforeUma} -> ${gachaData.inventory.length}\n` +
       `Support inventory: ${beforeSupport} -> ${gachaData.supportInventory.length}\n` +
       `Uma piece slots: ${beforeFrag} -> ${Object.keys(gachaData.fragments).length}\n` +
-      `Support fragment slots: ${beforeSupportFrag} -> ${Object.keys(gachaData.supportFragments).length}`
+      `Support overflow slots: ${beforeSupportFrag} -> ${Object.keys(gachaData.supportFragments).length}`
   }, { quoted: msg });
 }
 
@@ -1172,13 +1282,87 @@ function handleSupportInventory(sock, remoteJid, jid, gachaData, args, msg) {
     `*${EMOJI.support} Koleksi Support Card ${EMOJI.support}*\n` +
     `Page ${page}/${totalPages}\n\n`;
   slice.forEach((c, idx) => {
-    const frag = gachaData.supportFragments[c.id] || 0;
+    const frag = getCounter(gachaData.supportFragments, String(c.id));
     const lb = Math.min(SUPPORT_MAX_LIMIT_BREAK, Number(c.limitBreak) || 0);
-    inv += `${start + idx + 1}. ${c.emoji} ${c.name}${supportMetaText(c)} [${c.rarity}] Lv${c.level} LB${lb}${frag > 0 ? ` +${frag}F` : ''}\n`;
+    inv += `${start + idx + 1}. ${c.emoji} ${c.name}${supportMetaText(c)} [${c.rarity}] LB${lb}${frag > 0 ? ` | Spare ${frag}` : ''}\n`;
   });
   inv += `\n*${EMOJI.total} Total: ${cleanedInventory.length} unique support cards*\n`;
   inv += `Ketik: !gacha support inventory <page>`;
   return sock.sendMessage(remoteJid, { text: inv }, { quoted: msg });
+}
+
+function resolveSupportSellRarity(gachaData, idKey) {
+  const inv = Array.isArray(gachaData.supportInventory) ? gachaData.supportInventory : [];
+  const byInv = inv.find((c) => String(c?.id || '').trim().toLowerCase() === idKey);
+  if (byInv?.rarity) return normalizeSupportRarity(byInv.rarity);
+  return 'R';
+}
+
+function handleSupportSell(sock, remoteJid, jid, gachaData, args, msg) {
+  const modeRaw = String(args?.[0] || '').trim().toLowerCase();
+  const stash = normalizeCounterMap(gachaData.supportFragments);
+  gachaData.supportFragments = stash;
+
+  const keys = Object.keys(stash);
+  if (!keys.length) {
+    return sock.sendMessage(remoteJid, {
+      text: 'Tidak ada stok dupe support untuk dijual (hanya dupe setelah LB4 yang bisa dijual).'
+    }, { quoted: msg });
+  }
+
+  const sellRows = [];
+  if (!modeRaw || modeRaw === 'help') {
+    return sock.sendMessage(remoteJid, {
+      text:
+        '*Support Sell*\n' +
+        '- !gacha support sell all\n' +
+        '- !gacha support sell <card_id>\n' +
+        'Contoh: !gacha support sell 30028'
+    }, { quoted: msg });
+  }
+
+  if (modeRaw === 'all') {
+    for (const idKey of keys) {
+      sellRows.push({ idKey, count: getCounter(stash, idKey) });
+    }
+  } else {
+    const wanted = modeRaw.replace(/\D/g, '');
+    const idKey = keys.find((k) => String(k).toLowerCase() === modeRaw) || keys.find((k) => String(k).replace(/\D/g, '') === wanted);
+    if (!idKey) {
+      return sock.sendMessage(remoteJid, {
+        text: `Card ID '${modeRaw}' tidak ditemukan di stok dupe overflow.`
+      }, { quoted: msg });
+    }
+    sellRows.push({ idKey, count: getCounter(stash, idKey) });
+  }
+
+  let totalCopies = 0;
+  let carrotsGain = 0;
+  for (const row of sellRows) {
+    if (!row.count) continue;
+    const rarity = resolveSupportSellRarity(gachaData, String(row.idKey).toLowerCase());
+    const rate = SUPPORT_OVERFLOW_SELL_VALUE[rarity] || SUPPORT_OVERFLOW_SELL_VALUE.R;
+    totalCopies += row.count;
+    carrotsGain += row.count * rate;
+    setCounter(gachaData.supportFragments, row.idKey, 0);
+  }
+
+  if (totalCopies <= 0 || carrotsGain <= 0) {
+    return sock.sendMessage(remoteJid, {
+      text: 'Tidak ada card overflow yang terjual.'
+    }, { quoted: msg });
+  }
+
+  gachaData.carrots += carrotsGain;
+  setGacha(jid, gachaData);
+
+  return sock.sendMessage(remoteJid, {
+    text:
+      '*Support Sell Berhasil*\n' +
+      `Terjual: ${totalCopies} card overflow\n` +
+      `Dapat: +${formatCurrency(carrotsGain)} ${EMOJI.carrot}\n` +
+      `Saldo: ${formatCurrency(gachaData.carrots)} ${EMOJI.carrot}`
+  }, { quoted: msg });
 }
 
 function handleStats(sock, remoteJid, jid, gachaData, msg) {
@@ -1191,7 +1375,13 @@ function handleStats(sock, remoteJid, jid, gachaData, msg) {
   const totalPulls = gachaData.pulls;
   const totalUnique = cleanedInventory.length;
   const avgPerUma = totalUnique > 0 ? (totalPulls / totalUnique).toFixed(2) : '0.00';
-  const totalFragments = Object.values(gachaData.fragments).reduce((a, b) => a + b, 0);
+  const totalFragments = Object.values(normalizeCounterMap(gachaData.fragments)).reduce((a, b) => a + b, 0);
+  const starSummary = cleanedInventory.reduce((acc, u) => {
+    const s = clampUmaStar(u.star, u.rarity);
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {});
+  const starText = [1, 2, 3, 4, 5].map((s) => `\u2605${s}:${starSummary[s] || 0}`).join(' | ');
 
   return sock.sendMessage(remoteJid, {
     text:
@@ -1200,7 +1390,8 @@ function handleStats(sock, remoteJid, jid, gachaData, msg) {
       `${EMOJI.gacha} Total Pulls: ${totalPulls}\n` +
       `${EMOJI.inventory} Unique Umas: ${totalUnique}\n` +
       `${EMOJI.stats} Avg Pull/Uma: ${avgPerUma}\n` +
-      `${EMOJI.duplicate} Total Pieces: ${totalFragments}`
+      `${EMOJI.duplicate} Total Pieces: ${totalFragments}\n` +
+      `${EMOJI.star} Star Summary: ${starText}`
   }, { quoted: msg });
 }
 
@@ -1214,7 +1405,7 @@ function handleSupportStats(sock, remoteJid, jid, gachaData, msg) {
   const totalPulls = gachaData.supportPulls;
   const totalUnique = cleanedInventory.length;
   const avgPerCard = totalUnique > 0 ? (totalPulls / totalUnique).toFixed(2) : '0.00';
-  const totalFragments = Object.values(gachaData.supportFragments).reduce((a, b) => a + b, 0);
+  const totalFragments = Object.values(normalizeCounterMap(gachaData.supportFragments)).reduce((a, b) => a + b, 0);
 
   return sock.sendMessage(remoteJid, {
     text:
@@ -1223,8 +1414,8 @@ function handleSupportStats(sock, remoteJid, jid, gachaData, msg) {
       `${EMOJI.support} Total Pulls: ${totalPulls}\n` +
       `${EMOJI.inventory} Unique Support Cards: ${totalUnique}\n` +
       `${EMOJI.stats} Avg Pull/Card: ${avgPerCard}\n` +
-      `${EMOJI.duplicate} Total Fragments: ${totalFragments}\n` +
-      `${EMOJI.ssr} Pity Progress: ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`
+      `${EMOJI.duplicate} Total Overflow Dupes: ${totalFragments}\n` +
+      `${EMOJI.ssr} Shared Pity (1x+10x): ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`
   }, { quoted: msg });
 }
 
