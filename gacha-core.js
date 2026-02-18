@@ -17,14 +17,18 @@ const CARROT_PRICES = {
 
 const DAILY_CARROT = 300;
 const SUPPORT_DROP_RATES_MULTI = {
-  SSR: 3,
-  SR: 18,
-  R: 79
+  SSR: 2.2,
+  SR: 22.8,
+  R: 75
 };
 const SUPPORT_DROP_RATES_SINGLE = {
-  SSR: 1,
-  SR: 9,
-  R: 90
+  SSR: 0.8,
+  SR: 8.2,
+  R: 91
+};
+const SUPPORT_MULTI_GUARANTEE_SRPLUS_RATES = {
+  SSR: 3,
+  SR: 97
 };
 const SUPPORT_PITY_THRESHOLD = 100;
 const SUPPORT_MAX_LIMIT_BREAK = 4;
@@ -315,6 +319,12 @@ function rollSupportRarity(mode = 'multi') {
   return 'R';
 }
 
+function rollSupportGuaranteedSrPlusRarity() {
+  const roll = Math.random() * 100;
+  if (roll < SUPPORT_MULTI_GUARANTEE_SRPLUS_RATES.SSR) return 'SSR';
+  return 'SR';
+}
+
 function isSupportSSR(card) {
   return !!card && card.rarity === 'SSR';
 }
@@ -575,23 +585,39 @@ function getSupportPoolsByRarity() {
   return pools;
 }
 
-function pullSupportCardByRate(forceSSR = false, mode = 'multi') {
-  const targetRarity = forceSSR ? 'SSR' : rollSupportRarity(mode);
+function pickSupportCardFromPoolByRarity(targetRarity, options = {}) {
+  const allowAnyFallback = options.allowAnyFallback !== false;
   const pools = getSupportPoolsByRarity();
-
   if (pools && Array.isArray(pools[targetRarity]) && pools[targetRarity].length > 0) {
     const pool = pools[targetRarity];
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
   if (typeof umaDb.getRandomSupportCard !== 'function') return null;
-
   for (let i = 0; i < 40; i++) {
     const card = buildSupportCardEntity(umaDb.getRandomSupportCard());
     if (card && card.rarity === targetRarity) return card;
   }
-
+  if (!allowAnyFallback) return null;
   return buildSupportCardEntity(umaDb.getRandomSupportCard());
+}
+
+function pullSupportCardByRate(forceSSR = false, mode = 'multi') {
+  const targetRarity = forceSSR ? 'SSR' : rollSupportRarity(mode);
+  return pickSupportCardFromPoolByRarity(targetRarity);
+}
+
+function pickGuaranteedSrPlusSupportCard() {
+  const primaryRarity = rollSupportGuaranteedSrPlusRarity();
+  const primary = pickSupportCardFromPoolByRarity(primaryRarity, { allowAnyFallback: false });
+  if (primary) return primary;
+
+  const secondaryRarity = primaryRarity === 'SR' ? 'SSR' : 'SR';
+  const secondary = pickSupportCardFromPoolByRarity(secondaryRarity, { allowAnyFallback: false });
+  if (secondary) return secondary;
+
+  // Last fallback for unusual/partial dataset conditions.
+  return pullSupportCardByRate(false, 'multi');
 }
 
 async function handle(sock, remoteJid, args, msg) {
@@ -620,6 +646,7 @@ async function handle(sock, remoteJid, args, msg) {
         `- !gacha support stats - Statistik support gacha\n` +
         `\nDrop rate support 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
         `Drop rate support 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
+        `10x guarantee: minimal 1 SR+ per multi.\n` +
         `Pity support: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR\n`
     }, { quoted: msg });
   }
@@ -667,6 +694,7 @@ async function handleSupportCommand(sock, remoteJid, jid, supportArgs, gachaData
         `- !gacha support stats\n` +
         `\nDrop rate 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
         `Drop rate 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
+        `10x guarantee: minimal 1 SR+ per multi.\n` +
         `Pity: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR`
     }, { quoted: msg });
   }
@@ -985,10 +1013,18 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
   let pullResults = '';
   const newCards = [];
   let pityTriggered = 0;
+  let hasSrOrAbove = false;
 
   for (let i = 0; i < 10; i++) {
     const guaranteedSSR = gachaData.supportPity >= SUPPORT_PITY_THRESHOLD - 1;
-    const card = pullSupportCardByRate(guaranteedSSR, 'multi');
+    let card;
+    if (guaranteedSSR) {
+      card = pickSupportCardFromPoolByRarity('SSR');
+    } else if (i === 9 && !hasSrOrAbove) {
+      card = pickGuaranteedSrPlusSupportCard();
+    } else {
+      card = pullSupportCardByRate(false, 'multi');
+    }
     if (!card) {
       return sock.sendMessage(remoteJid, {
         text: `${EMOJI.warning} *Pull Gagal*\n\nData support card tidak valid saat proses 10x.`
@@ -1019,6 +1055,7 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
       pullResults += `${i + 1}. ${card.emoji} *${card.name}* [${card.rarity}]${guaranteedSSR ? ' [PITY]' : ''}${supportMetaText(card)} [LB0]\n`;
     }
 
+    if (card.rarity === 'SR' || card.rarity === 'SSR') hasSrOrAbove = true;
     if (guaranteedSSR) pityTriggered += 1;
     if (isSupportSSR(card)) gachaData.supportPity = 0;
     else gachaData.supportPity += 1;
