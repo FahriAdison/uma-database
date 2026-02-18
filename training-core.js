@@ -808,7 +808,7 @@ function applyTraining(run, kind) {
     else restRecovery = 70;
     run.energy = clamp(e + restRecovery, 0, 100);
     if (restRecovery >= 70) run.mood = shiftMood(run.mood, 1);
-    else if (restRecovery <= 30) run.mood = shiftMood(run.mood, -1);
+    else if (restRecovery <= 30 && Math.random() < 0.35) run.mood = shiftMood(run.mood, -1);
   }
 
   const gain = (base, bonus = 0, stat = null) => {
@@ -862,12 +862,15 @@ function applyTraining(run, kind) {
   return { failed, hintTriggered, skillPointGain, restRecovery };
 }
 
-function maybeAddRandomCondition(run) {
+function maybeAddRandomCondition(run, kind = 'train') {
   const roll = Math.random();
-  if (roll < 0.05) {
+  const badChance = kind === 'rest' ? 0.005 : kind === 'outing' ? 0.004 : 0.05;
+  const goodThreshold = kind === 'rest' ? 0.985 : kind === 'outing' ? 0.99 : 0.93;
+
+  if (roll < badChance) {
     const added = addCondition(run, pick(['lazy_habit', 'headache', 'overweight']));
     if (added) return `Condition added: ${CONDITION_META[run.conditions[run.conditions.length - 1]].name}`;
-  } else if (roll > 0.93) {
+  } else if (roll > goodThreshold) {
     const added = addCondition(run, pick(['sharp', 'rising_star']));
     if (added) return `Condition gained: ${CONDITION_META[run.conditions[run.conditions.length - 1]].name}`;
   }
@@ -1255,7 +1258,7 @@ async function doTrain(sock, remoteJid, senderJid, gachaData, args, msg) {
   const conditionRecovered = maybeRecoverCondition(run, type);
   if (conditionRecovered) eventLines.push(conditionRecovered);
 
-  const randomCondition = maybeAddRandomCondition(run);
+  const randomCondition = maybeAddRandomCondition(run, type);
   if (randomCondition) eventLines.push(randomCondition);
 
   const triggeredEvents = await maybeTriggerTurnEvent(run);
@@ -1320,7 +1323,7 @@ async function doOuting(sock, remoteJid, senderJid, gachaData, msg) {
   const recovered = maybeRecoverCondition(run, 'outing');
   if (recovered) extraLines.push(recovered);
 
-  const conditionLine = maybeAddRandomCondition(run);
+  const conditionLine = maybeAddRandomCondition(run, 'outing');
   if (conditionLine) extraLines.push(conditionLine);
   const fanGoalLine = checkFanGoalProgress(run);
   if (fanGoalLine) extraLines.push(fanGoalLine);
