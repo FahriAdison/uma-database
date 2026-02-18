@@ -16,10 +16,15 @@ const CARROT_PRICES = {
 };
 
 const DAILY_CARROT = 300;
-const SUPPORT_DROP_RATES = {
+const SUPPORT_DROP_RATES_MULTI = {
   SSR: 3,
   SR: 18,
   R: 79
+};
+const SUPPORT_DROP_RATES_SINGLE = {
+  SSR: 1,
+  SR: 9,
+  R: 90
 };
 const SUPPORT_PITY_THRESHOLD = 100;
 const SUPPORT_MAX_LIMIT_BREAK = 4;
@@ -302,10 +307,11 @@ async function enrichSupportCard(card) {
   };
 }
 
-function rollSupportRarity() {
+function rollSupportRarity(mode = 'multi') {
+  const rates = mode === 'single' ? SUPPORT_DROP_RATES_SINGLE : SUPPORT_DROP_RATES_MULTI;
   const roll = Math.random() * 100;
-  if (roll < SUPPORT_DROP_RATES.SSR) return 'SSR';
-  if (roll < SUPPORT_DROP_RATES.SSR + SUPPORT_DROP_RATES.SR) return 'SR';
+  if (roll < rates.SSR) return 'SSR';
+  if (roll < rates.SSR + rates.SR) return 'SR';
   return 'R';
 }
 
@@ -569,8 +575,8 @@ function getSupportPoolsByRarity() {
   return pools;
 }
 
-function pullSupportCardByRate(forceSSR = false) {
-  const targetRarity = forceSSR ? 'SSR' : rollSupportRarity();
+function pullSupportCardByRate(forceSSR = false, mode = 'multi') {
+  const targetRarity = forceSSR ? 'SSR' : rollSupportRarity(mode);
   const pools = getSupportPoolsByRarity();
 
   if (pools && Array.isArray(pools[targetRarity]) && pools[targetRarity].length > 0) {
@@ -612,7 +618,8 @@ async function handle(sock, remoteJid, args, msg) {
         `- !gacha support 10x - Pull 10x support card\n` +
         `- !gacha support inventory [page] - Koleksi support card\n` +
         `- !gacha support stats - Statistik support gacha\n` +
-        `\nDrop rate support: SSR ${SUPPORT_DROP_RATES.SSR}% | SR ${SUPPORT_DROP_RATES.SR}% | R ${SUPPORT_DROP_RATES.R}%\n` +
+        `\nDrop rate support 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
+        `Drop rate support 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
         `Pity support: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR\n`
     }, { quoted: msg });
   }
@@ -658,7 +665,8 @@ async function handleSupportCommand(sock, remoteJid, jid, supportArgs, gachaData
         `- !gacha support 10x\n` +
         `- !gacha support inventory [page]\n` +
         `- !gacha support stats\n` +
-        `\nDrop rate: SSR ${SUPPORT_DROP_RATES.SSR}% | SR ${SUPPORT_DROP_RATES.SR}% | R ${SUPPORT_DROP_RATES.R}%\n` +
+        `\nDrop rate 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
+        `Drop rate 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
         `Pity: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR`
     }, { quoted: msg });
   }
@@ -889,7 +897,7 @@ async function handleSupportSingle(sock, remoteJid, jid, gachaData, msg) {
   }
 
   const guaranteedSSR = gachaData.supportPity >= SUPPORT_PITY_THRESHOLD - 1;
-  const card = await enrichSupportCard(pullSupportCardByRate(guaranteedSSR));
+  const card = await enrichSupportCard(pullSupportCardByRate(guaranteedSSR, 'single'));
   if (!card) {
     return sock.sendMessage(remoteJid, {
       text: `${EMOJI.warning} *Pull Gagal*\n\nData support card tidak valid.`
@@ -980,7 +988,7 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
 
   for (let i = 0; i < 10; i++) {
     const guaranteedSSR = gachaData.supportPity >= SUPPORT_PITY_THRESHOLD - 1;
-    const card = pullSupportCardByRate(guaranteedSSR);
+    const card = pullSupportCardByRate(guaranteedSSR, 'multi');
     if (!card) {
       return sock.sendMessage(remoteJid, {
         text: `${EMOJI.warning} *Pull Gagal*\n\nData support card tidak valid saat proses 10x.`
