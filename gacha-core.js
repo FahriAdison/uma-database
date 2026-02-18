@@ -17,14 +17,14 @@ const CARROT_PRICES = {
 
 const DAILY_CARROT = 300;
 const SUPPORT_DROP_RATES_MULTI = {
-  SSR: 2.2,
-  SR: 22.8,
-  R: 75
+  SSR: 3,
+  SR: 18,
+  R: 79
 };
 const SUPPORT_DROP_RATES_SINGLE = {
-  SSR: 0.8,
-  SR: 8.2,
-  R: 91
+  SSR: 3,
+  SR: 18,
+  R: 79
 };
 const SUPPORT_MULTI_GUARANTEE_SRPLUS_RATES = {
   SSR: 3,
@@ -414,10 +414,6 @@ function rollSupportGuaranteedSrPlusRarity() {
   return 'SR';
 }
 
-function isSupportSSR(card) {
-  return !!card && card.rarity === 'SSR';
-}
-
 function sanitizeUmaInventory(inventory) {
   if (!Array.isArray(inventory)) return [];
 
@@ -740,7 +736,7 @@ async function handle(sock, remoteJid, args, msg) {
         `\nDrop rate support 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
         `Drop rate support 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
         `10x guarantee: minimal 1 SR+ per multi.\n` +
-        `Shared pity support (1x + 10x): SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR\n`
+        `Shared pity support (1x + 10x): SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull (reset saat pity trigger)\n`
     }, { quoted: msg });
   }
 
@@ -789,7 +785,7 @@ async function handleSupportCommand(sock, remoteJid, jid, supportArgs, gachaData
         `\nDrop rate 1x: SSR ${SUPPORT_DROP_RATES_SINGLE.SSR}% | SR ${SUPPORT_DROP_RATES_SINGLE.SR}% | R ${SUPPORT_DROP_RATES_SINGLE.R}%\n` +
         `Drop rate 10x: SSR ${SUPPORT_DROP_RATES_MULTI.SSR}% | SR ${SUPPORT_DROP_RATES_MULTI.SR}% | R ${SUPPORT_DROP_RATES_MULTI.R}%\n` +
         `10x guarantee: minimal 1 SR+ per multi.\n` +
-        `Shared pity (1x + 10x): SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR`
+        `Shared pity (1x + 10x): SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull (reset saat pity trigger)`
     }, { quoted: msg });
   }
 
@@ -1036,7 +1032,8 @@ async function handleSupportSingle(sock, remoteJid, jid, gachaData, msg) {
     }, { quoted: msg });
   }
 
-  const guaranteedSSR = gachaData.supportPity >= SUPPORT_PITY_THRESHOLD - 1;
+  const pityBefore = Number(gachaData.supportPity || 0);
+  const guaranteedSSR = pityBefore >= SUPPORT_PITY_THRESHOLD - 1;
   const card = await enrichSupportCard(pullSupportCardByRate(guaranteedSSR, 'single'));
   if (!card) {
     return sock.sendMessage(remoteJid, {
@@ -1069,11 +1066,8 @@ async function handleSupportSingle(sock, remoteJid, jid, gachaData, msg) {
     resultMsg = `${EMOJI.new} *New Support Card!*\n${card.emoji} *${card.name}* [${card.rarity}]${supportMetaText(card)} [LB0]\n`;
   }
 
-  if (isSupportSSR(card)) {
-    gachaData.supportPity = 0;
-  } else {
-    gachaData.supportPity += 1;
-  }
+  if (guaranteedSSR) gachaData.supportPity = 0;
+  else gachaData.supportPity += 1;
 
   gachaData.supportPulls += 1;
   gachaData.supportHistory.push({ card: card.id, time: Date.now(), count: 1 });
@@ -1086,6 +1080,7 @@ async function handleSupportSingle(sock, remoteJid, jid, gachaData, msg) {
     `\n-${CARROT_PRICES.single} ${EMOJI.carrot}\n` +
     `Sisa: ${formatCurrency(gachaData.carrots)} ${EMOJI.carrot}\n` +
     `Total Pull: ${gachaData.supportPulls}\n` +
+    `Pity Change: ${pityBefore} -> ${gachaData.supportPity}\n` +
     `Shared Pity (1x+10x): ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`;
 
   const imageUrl = card.imageUrl || getSupportCardImageUrl(card.id);
@@ -1121,6 +1116,7 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
   }
 
   gachaData.carrots -= CARROT_PRICES.multi;
+  const pityBefore = Number(gachaData.supportPity || 0);
   let pullResults = '';
   const newCards = [];
   let pityTriggered = 0;
@@ -1173,7 +1169,7 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
 
     if (card.rarity === 'SR' || card.rarity === 'SSR') hasSrOrAbove = true;
     if (guaranteedSSR) pityTriggered += 1;
-    if (isSupportSSR(card)) gachaData.supportPity = 0;
+    if (guaranteedSSR) gachaData.supportPity = 0;
     else gachaData.supportPity += 1;
 
     gachaData.supportHistory.push({ card: card.id, time: Date.now(), count: 1 });
@@ -1192,6 +1188,7 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
       `New Cards: ${newCards.length}\n` +
       `Guarantee Slot 10 (SR+): ON\n` +
       `Pity Triggered: ${pityTriggered}x\n` +
+      `Pity Change: ${pityBefore} -> ${gachaData.supportPity}\n` +
       `Shared Pity (1x+10x): ${gachaData.supportPity}/${SUPPORT_PITY_THRESHOLD}`
   }, { quoted: msg });
 }
