@@ -41,7 +41,8 @@ export {
   getCharacterById as apiGetCharacterById,
   getCharacterImagesById as apiGetCharacterImagesById,
   getCharacterMoviesById as apiGetCharacterMoviesById,
-  getCurrentBirthdays as apiGetCurrentBirthdays
+  getCurrentBirthdays as apiGetCurrentBirthdays,
+  getOutfitList as apiGetOutfitList
 } from "./umapyoiApi.js";
 
 export { default as trainingCommand, configureTrainingCore } from "./training-core.js";
