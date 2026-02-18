@@ -40,6 +40,10 @@ const EMOJI = {
   sr: '\u{1F31E}',
   r: '\u{1F539}'
 };
+const UMA_RARITY_ORDER = ['SS', 'S', 'A'];
+const SUPPORT_RARITY_ORDER = ['SSR', 'SR', 'R'];
+const UMA_INVENTORY_PAGE_SIZE = 15;
+const SUPPORT_INVENTORY_PAGE_SIZE = 12;
 
 let warmupUmaPromise = null;
 let warmupSupportPromise = null;
@@ -49,6 +53,10 @@ const umaImageCache = new Map();
 
 function formatCurrency(num) {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function normText(v) {
+  return String(v || '').toLowerCase().trim();
 }
 
 async function sendWithImageFallback(sock, remoteJid, imageUrl, caption, quotedMsg) {
@@ -71,6 +79,17 @@ function normalizeUmaRarity(value) {
   const rarity = value.toUpperCase().trim();
   if (rarity === 'SS' || rarity === 'S' || rarity === 'A') return rarity;
   return 'A';
+}
+
+function rarityRank(order, rarity) {
+  const idx = order.indexOf(String(rarity || '').toUpperCase());
+  return idx >= 0 ? idx : order.length + 1;
+}
+
+function parsePageArg(raw, fallback = 1) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.floor(n);
 }
 
 function normalizeSupportRarity(value) {
@@ -297,65 +316,106 @@ function isSupportSSR(card) {
 function sanitizeUmaInventory(inventory) {
   if (!Array.isArray(inventory)) return [];
 
-  return inventory
-    .filter((item) => item && item.id !== undefined && item.id !== null)
-    .map((item) => {
-      const name = typeof item.name === 'string' ? item.name.trim() : '';
-      const rarity = normalizeUmaRarity(item.rarity);
-      if (!name) return null;
+  const catalog = typeof umaDb.getAllUmas === 'function' ? umaDb.getAllUmas() : [];
+  const rarityById = new Map();
+  if (Array.isArray(catalog)) {
+    for (const row of catalog) {
+      const idKey = String(row?.id || '').trim().toLowerCase();
+      if (!idKey) continue;
+      rarityById.set(idKey, normalizeUmaRarity(row?.rarity));
+    }
+  }
 
-      const levelNum = Number(item.level);
-      const countNum = Number(item.count);
+  const merged = new Map();
+  for (const item of inventory) {
+    if (!item || item.id === undefined || item.id === null) continue;
+    const name = typeof item.name === 'string' ? item.name.trim() : '';
+    if (!name) continue;
 
-      return {
-        id: item.id,
-        name,
-        rarity,
-        emoji: typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji : EMOJI.star,
-        charaId: Number.isInteger(Number(item.charaId)) ? Number(item.charaId) : null,
-        cardId: Number.isInteger(Number(item.cardId)) ? Number(item.cardId) : null,
-        outfitName: typeof item.outfitName === 'string' && item.outfitName.trim() ? item.outfitName.trim() : null,
-        imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : null,
-        pulledAt: Number(item.pulledAt) || Date.now(),
-        level: Number.isFinite(levelNum) && levelNum > 0 ? Math.floor(levelNum) : 1,
-        count: Number.isFinite(countNum) && countNum > 0 ? Math.floor(countNum) : 1
-      };
-    })
-    .filter(Boolean);
+    const idKey = String(item.id).trim().toLowerCase();
+    const levelNum = Number(item.level);
+    const countNum = Number(item.count);
+    const normalized = {
+      id: item.id,
+      name,
+      rarity: rarityById.get(idKey) || normalizeUmaRarity(item.rarity),
+      emoji: typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji : EMOJI.star,
+      charaId: Number.isInteger(Number(item.charaId)) ? Number(item.charaId) : null,
+      cardId: Number.isInteger(Number(item.cardId)) ? Number(item.cardId) : null,
+      outfitName: typeof item.outfitName === 'string' && item.outfitName.trim() ? item.outfitName.trim() : null,
+      imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : null,
+      pulledAt: Number(item.pulledAt) || Date.now(),
+      level: Number.isFinite(levelNum) && levelNum > 0 ? Math.floor(levelNum) : 1,
+      count: Number.isFinite(countNum) && countNum > 0 ? Math.floor(countNum) : 1
+    };
+
+    if (!merged.has(idKey)) {
+      merged.set(idKey, normalized);
+      continue;
+    }
+
+    const prev = merged.get(idKey);
+    prev.count = (Number(prev.count) || 1) + (Number(normalized.count) || 1);
+    prev.level = Math.max(Number(prev.level) || 1, Number(normalized.level) || 1);
+    prev.pulledAt = Math.max(Number(prev.pulledAt) || 0, Number(normalized.pulledAt) || 0);
+    if (!prev.imageUrl && normalized.imageUrl) prev.imageUrl = normalized.imageUrl;
+    if (!prev.outfitName && normalized.outfitName) prev.outfitName = normalized.outfitName;
+    if (!prev.charaId && normalized.charaId) prev.charaId = normalized.charaId;
+    if (!prev.cardId && normalized.cardId) prev.cardId = normalized.cardId;
+    prev.rarity = rarityById.get(idKey) || prev.rarity || normalized.rarity;
+  }
+
+  return [...merged.values()];
 }
 
 function sanitizeSupportInventory(inventory) {
   if (!Array.isArray(inventory)) return [];
 
-  return inventory
-    .filter((item) => item && item.id !== undefined && item.id !== null)
-    .map((item) => {
-      const name = typeof item.name === 'string' ? item.name.trim() : '';
-      const rarity = normalizeSupportRarity(item.rarity);
-      if (!name) return null;
+  const merged = new Map();
+  for (const item of inventory) {
+    if (!item || item.id === undefined || item.id === null) continue;
+    const name = typeof item.name === 'string' ? item.name.trim() : '';
+    if (!name) continue;
+    const rarity = normalizeSupportRarity(item.rarity);
+    const levelNum = Number(item.level);
+    const countNum = Number(item.count);
+    const lbNum = Number(item.limitBreak ?? item.lb);
+    const idKey = String(item.id).trim();
 
-      const levelNum = Number(item.level);
-      const countNum = Number(item.count);
-      const lbNum = Number(item.limitBreak ?? item.lb);
+    const normalized = {
+      id: item.id,
+      name,
+      rarity,
+      type: normalizeSupportType(item.type),
+      charId: Number.isInteger(Number(item.charId)) ? Number(item.charId) : null,
+      charName: typeof item.charName === 'string' && item.charName.trim() ? item.charName.trim() : null,
+      gametora: typeof item.gametora === 'string' ? item.gametora : null,
+      typeIconUrl: typeof item.typeIconUrl === 'string' ? item.typeIconUrl : null,
+      imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : getSupportCardImageUrl(item.id),
+      limitBreak: Number.isFinite(lbNum) && lbNum > 0 ? Math.min(SUPPORT_MAX_LIMIT_BREAK, Math.floor(lbNum)) : 0,
+      emoji: typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji : supportEmojiByRarity(rarity),
+      pulledAt: Number(item.pulledAt) || Date.now(),
+      level: Number.isFinite(levelNum) && levelNum > 0 ? Math.floor(levelNum) : 1,
+      count: Number.isFinite(countNum) && countNum > 0 ? Math.floor(countNum) : 1
+    };
 
-      return {
-        id: item.id,
-        name,
-        rarity,
-        type: normalizeSupportType(item.type),
-        charId: Number.isInteger(Number(item.charId)) ? Number(item.charId) : null,
-        charName: typeof item.charName === 'string' && item.charName.trim() ? item.charName.trim() : null,
-        gametora: typeof item.gametora === 'string' ? item.gametora : null,
-        typeIconUrl: typeof item.typeIconUrl === 'string' ? item.typeIconUrl : null,
-        imageUrl: typeof item.imageUrl === 'string' ? item.imageUrl : getSupportCardImageUrl(item.id),
-        limitBreak: Number.isFinite(lbNum) && lbNum > 0 ? Math.min(SUPPORT_MAX_LIMIT_BREAK, Math.floor(lbNum)) : 0,
-        emoji: typeof item.emoji === 'string' && item.emoji.trim() ? item.emoji : supportEmojiByRarity(rarity),
-        pulledAt: Number(item.pulledAt) || Date.now(),
-        level: Number.isFinite(levelNum) && levelNum > 0 ? Math.floor(levelNum) : 1,
-        count: Number.isFinite(countNum) && countNum > 0 ? Math.floor(countNum) : 1
-      };
-    })
-    .filter(Boolean);
+    if (!merged.has(idKey)) {
+      merged.set(idKey, normalized);
+      continue;
+    }
+
+    const prev = merged.get(idKey);
+    prev.count = (Number(prev.count) || 1) + (Number(normalized.count) || 1);
+    prev.level = Math.max(Number(prev.level) || 1, Number(normalized.level) || 1);
+    prev.limitBreak = Math.max(Number(prev.limitBreak) || 0, Number(normalized.limitBreak) || 0);
+    prev.pulledAt = Math.max(Number(prev.pulledAt) || 0, Number(normalized.pulledAt) || 0);
+    if (!prev.imageUrl && normalized.imageUrl) prev.imageUrl = normalized.imageUrl;
+    if (!prev.charName && normalized.charName) prev.charName = normalized.charName;
+    if (!prev.type && normalized.type) prev.type = normalized.type;
+    if (!prev.gametora && normalized.gametora) prev.gametora = normalized.gametora;
+  }
+
+  return [...merged.values()];
 }
 
 async function ensureUmaDataReady() {
@@ -448,7 +508,8 @@ function ensureGachaShape(gachaData) {
 }
 
 function findOwnedItem(inventory, id) {
-  return inventory.find((item) => String(item.id) === String(id));
+  const key = String(id || '').trim().toLowerCase();
+  return inventory.find((item) => String(item?.id || '').trim().toLowerCase() === key);
 }
 
 function buildSupportCardEntity(raw) {
@@ -530,6 +591,9 @@ function pullSupportCardByRate(forceSSR = false) {
 async function handle(sock, remoteJid, args, msg) {
   const senderJid = msg.key.participant || msg.key.remoteJid;
   const subcommand = args[0]?.toLowerCase();
+  if (['1x', '10x', 'inventory', 'stats'].includes(subcommand)) {
+    await ensureUmaDataReady().catch(() => {});
+  }
 
   if (!subcommand) {
     return sock.sendMessage(remoteJid, {
@@ -540,12 +604,13 @@ async function handle(sock, remoteJid, args, msg) {
         `- !gacha daily - Claim reward harian (${DAILY_CARROT} carrots)\n` +
         `- !gacha 1x - Pull 1x gacha uma (${CARROT_PRICES.single} carrots)\n` +
         `- !gacha 10x - Pull 10x gacha uma (${CARROT_PRICES.multi} carrots)\n` +
-        `- !gacha inventory - Lihat koleksi uma mu\n` +
+        `- !gacha inventory [page] - Lihat koleksi uma mu\n` +
+        `- !gacha cleanup - Rapikan data inventory/profile\n` +
         `- !gacha stats - Statistik gacha uma\n` +
         `\n*Support Card Subcommand:*\n` +
         `- !gacha support 1x - Pull 1x support card\n` +
         `- !gacha support 10x - Pull 10x support card\n` +
-        `- !gacha support inventory - Koleksi support card\n` +
+        `- !gacha support inventory [page] - Koleksi support card\n` +
         `- !gacha support stats - Statistik support gacha\n` +
         `\nDrop rate support: SSR ${SUPPORT_DROP_RATES.SSR}% | SR ${SUPPORT_DROP_RATES.SR}% | R ${SUPPORT_DROP_RATES.R}%\n` +
         `Pity support: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR\n`
@@ -567,13 +632,15 @@ async function handle(sock, remoteJid, args, msg) {
     case '10x':
       return handleGachaMulti(sock, remoteJid, senderJid, gachaData, msg);
     case 'inventory':
-      return handleInventory(sock, remoteJid, gachaData, msg);
+      return handleInventory(sock, remoteJid, senderJid, gachaData, args.slice(1), msg);
+    case 'cleanup':
+      return handleCleanup(sock, remoteJid, senderJid, gachaData, msg);
     case 'stats':
-      return handleStats(sock, remoteJid, gachaData, msg);
+      return handleStats(sock, remoteJid, senderJid, gachaData, msg);
     default:
       return sock.sendMessage(
         remoteJid,
-        { text: 'Subcommand tidak dikenal. Gunakan: daily, 1x, 10x, inventory, stats, support' },
+        { text: 'Subcommand tidak dikenal. Gunakan: daily, 1x, 10x, inventory, cleanup, stats, support' },
         { quoted: msg }
       );
   }
@@ -589,7 +656,7 @@ async function handleSupportCommand(sock, remoteJid, jid, supportArgs, gachaData
         `Subcommand:\n` +
         `- !gacha support 1x\n` +
         `- !gacha support 10x\n` +
-        `- !gacha support inventory\n` +
+        `- !gacha support inventory [page]\n` +
         `- !gacha support stats\n` +
         `\nDrop rate: SSR ${SUPPORT_DROP_RATES.SSR}% | SR ${SUPPORT_DROP_RATES.SR}% | R ${SUPPORT_DROP_RATES.R}%\n` +
         `Pity: SSR dijamin tiap ${SUPPORT_PITY_THRESHOLD} pull tanpa SSR`
@@ -602,9 +669,9 @@ async function handleSupportCommand(sock, remoteJid, jid, supportArgs, gachaData
     case '10x':
       return handleSupportMulti(sock, remoteJid, jid, gachaData, msg);
     case 'inventory':
-      return handleSupportInventory(sock, remoteJid, gachaData, msg);
+      return handleSupportInventory(sock, remoteJid, jid, gachaData, supportArgs.slice(1), msg);
     case 'stats':
-      return handleSupportStats(sock, remoteJid, gachaData, msg);
+      return handleSupportStats(sock, remoteJid, jid, gachaData, msg);
     default:
       return sock.sendMessage(remoteJid, {
         text: 'Subcommand support tidak dikenal. Gunakan: 1x, 10x, inventory, stats'
@@ -682,7 +749,7 @@ async function handleGachaSingle(sock, remoteJid, jid, gachaData, msg) {
   if (existing) {
     existing.count = (existing.count || 1) + 1;
     gachaData.fragments[uma.id] = (gachaData.fragments[uma.id] || 0) + 1;
-    resultMsg = `${EMOJI.duplicate} *Duplicate!* Converted to fragment.\n${uma.emoji || EMOJI.star} ${uma.name} Fragment +1\n`;
+    resultMsg = `${EMOJI.duplicate} *Duplicate!* Converted to piece.\n${uma.emoji || EMOJI.star} ${uma.name} Piece +1\n`;
   } else {
     const cardId = getUmaCardId(uma);
     gachaData.inventory.push({
@@ -750,17 +817,24 @@ async function handleGachaMulti(sock, remoteJid, jid, gachaData, msg) {
     }
 
     const existing = findOwnedItem(gachaData.inventory, uma.id);
+    const resolvedCharaId = getUmaCharaId(uma);
+    const resolvedCardId = getUmaCardId(uma);
 
     if (existing) {
       existing.count = (existing.count || 1) + 1;
+      if (!existing.charaId && Number.isInteger(resolvedCharaId)) existing.charaId = resolvedCharaId;
+      if (!existing.cardId && Number.isInteger(resolvedCardId)) existing.cardId = resolvedCardId;
       gachaData.fragments[uma.id] = (gachaData.fragments[uma.id] || 0) + 1;
-      pullResults += `${i + 1}. ${uma.emoji || EMOJI.star} ${uma.name} (Fragment)\n`;
+      pullResults += `${i + 1}. ${uma.emoji || EMOJI.star} ${uma.name} (Piece +1)\n`;
     } else {
       gachaData.inventory.push({
         id: uma.id,
         name: uma.name,
         rarity: normalizeUmaRarity(uma.rarity),
         emoji: uma.emoji || EMOJI.star,
+        charaId: Number.isInteger(resolvedCharaId) ? resolvedCharaId : null,
+        cardId: Number.isInteger(resolvedCardId) ? resolvedCardId : null,
+        imageUrl: getUmaImageUrl(uma),
         pulledAt: Date.now(),
         level: 1,
         count: 1
@@ -960,100 +1034,113 @@ async function handleSupportMulti(sock, remoteJid, jid, gachaData, msg) {
   }, { quoted: msg });
 }
 
-function handleInventory(sock, remoteJid, gachaData, msg) {
+function handleInventory(sock, remoteJid, jid, gachaData, args, msg) {
   const cleanedInventory = sanitizeUmaInventory(gachaData.inventory);
   if (cleanedInventory.length !== gachaData.inventory.length) {
     gachaData.inventory = cleanedInventory;
-    setGacha(msg.key.participant || msg.key.remoteJid, gachaData);
+    setGacha(jid, gachaData);
   }
 
   if (cleanedInventory.length === 0) {
     return sock.sendMessage(remoteJid, { text: `${EMOJI.inventory} Inventorimu kosong! Lakukan gacha dulu.` }, { quoted: msg });
   }
 
-  let inv = `*${EMOJI.inventory} Koleksi Umamu ${EMOJI.inventory}*\n\n`;
-
-  const grouped = cleanedInventory.reduce((acc, item) => {
-    const key = item.rarity || 'UNKNOWN';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(item);
-    return acc;
-  }, {});
-
-  const order = ['SS', 'S', 'A'];
-  const rarityKeys = [
-    ...order.filter((k) => grouped[k]?.length),
-    ...Object.keys(grouped).filter((k) => !order.includes(k))
-  ];
-
-  rarityKeys.forEach((rarity) => {
-    const list = grouped[rarity];
-    const maxShown = rarity === 'A' ? 5 : 10;
-    inv += `*${rarity} Rarity (${list.length})*\n`;
-
-    list.slice(0, maxShown).forEach((u) => {
-      const frag = gachaData.fragments[u.id] || 0;
-      inv += `${u.emoji} ${u.name} Lv${u.level}${frag > 0 ? ` +${frag}F` : ''}\n`;
-    });
-
-    if (list.length > maxShown) inv += `... dan ${list.length - maxShown} lagi\n`;
-    inv += '\n';
+  const sorted = [...cleanedInventory].sort((a, b) => {
+    const rankGap = rarityRank(UMA_RARITY_ORDER, a?.rarity) - rarityRank(UMA_RARITY_ORDER, b?.rarity);
+    if (rankGap !== 0) return rankGap;
+    return normText(a?.name).localeCompare(normText(b?.name));
   });
 
-  inv += `*${EMOJI.total} Total: ${cleanedInventory.length} unique umas*`;
+  const totalPages = Math.max(1, Math.ceil(sorted.length / UMA_INVENTORY_PAGE_SIZE));
+  const requested = parsePageArg(args?.[0], 1);
+  const page = Math.max(1, Math.min(requested, totalPages));
+  const start = (page - 1) * UMA_INVENTORY_PAGE_SIZE;
+  const slice = sorted.slice(start, start + UMA_INVENTORY_PAGE_SIZE);
+
+  let inv =
+    `*${EMOJI.inventory} Koleksi Umamu ${EMOJI.inventory}*\n` +
+    `Page ${page}/${totalPages}\n\n`;
+  slice.forEach((u, idx) => {
+    const frag = gachaData.fragments[u.id] || 0;
+    inv += `${start + idx + 1}. ${u.emoji} ${u.name} [${u.rarity}] Lv${u.level}${frag > 0 ? ` +${frag}P` : ''}\n`;
+  });
+  inv += `\n*${EMOJI.total} Total: ${cleanedInventory.length} unique umas*\n`;
+  inv += `Ketik: !gacha inventory <page>`;
   return sock.sendMessage(remoteJid, { text: inv }, { quoted: msg });
 }
 
-function handleSupportInventory(sock, remoteJid, gachaData, msg) {
+function handleCleanup(sock, remoteJid, jid, gachaData, msg) {
+  const beforeUma = Array.isArray(gachaData.inventory) ? gachaData.inventory.length : 0;
+  const beforeSupport = Array.isArray(gachaData.supportInventory) ? gachaData.supportInventory.length : 0;
+  const beforeFrag = Object.keys(gachaData.fragments || {}).length;
+  const beforeSupportFrag = Object.keys(gachaData.supportFragments || {}).length;
+
+  gachaData.inventory = sanitizeUmaInventory(gachaData.inventory);
+  gachaData.supportInventory = sanitizeSupportInventory(gachaData.supportInventory);
+  gachaData.fragments = Object.fromEntries(
+    Object.entries(gachaData.fragments || {})
+      .map(([k, v]) => [String(k), Math.max(0, Math.floor(Number(v) || 0))])
+      .filter(([, v]) => v > 0)
+  );
+  gachaData.supportFragments = Object.fromEntries(
+    Object.entries(gachaData.supportFragments || {})
+      .map(([k, v]) => [String(k), Math.max(0, Math.floor(Number(v) || 0))])
+      .filter(([, v]) => v > 0)
+  );
+
+  setGacha(jid, gachaData);
+
+  return sock.sendMessage(remoteJid, {
+    text:
+      '*Cleanup Gacha Selesai*\n' +
+      `Uma inventory: ${beforeUma} -> ${gachaData.inventory.length}\n` +
+      `Support inventory: ${beforeSupport} -> ${gachaData.supportInventory.length}\n` +
+      `Uma piece slots: ${beforeFrag} -> ${Object.keys(gachaData.fragments).length}\n` +
+      `Support fragment slots: ${beforeSupportFrag} -> ${Object.keys(gachaData.supportFragments).length}`
+  }, { quoted: msg });
+}
+
+function handleSupportInventory(sock, remoteJid, jid, gachaData, args, msg) {
   const cleanedInventory = sanitizeSupportInventory(gachaData.supportInventory);
   if (cleanedInventory.length !== gachaData.supportInventory.length) {
     gachaData.supportInventory = cleanedInventory;
-    setGacha(msg.key.participant || msg.key.remoteJid, gachaData);
+    setGacha(jid, gachaData);
   }
 
   if (cleanedInventory.length === 0) {
     return sock.sendMessage(remoteJid, { text: `${EMOJI.support} Inventory support card kosong! Pull dulu.` }, { quoted: msg });
   }
 
-  let inv = `*${EMOJI.support} Koleksi Support Card ${EMOJI.support}*\n\n`;
-
-  const grouped = cleanedInventory.reduce((acc, item) => {
-    const key = item.rarity || 'R';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(item);
-    return acc;
-  }, {});
-
-  const order = ['SSR', 'SR', 'R'];
-  const rarityKeys = [
-    ...order.filter((k) => grouped[k]?.length),
-    ...Object.keys(grouped).filter((k) => !order.includes(k))
-  ];
-
-  rarityKeys.forEach((rarity) => {
-    const list = grouped[rarity];
-    const maxShown = rarity === 'R' ? 8 : 10;
-    inv += `*${rarity} (${list.length})*\n`;
-
-    list.slice(0, maxShown).forEach((c) => {
-      const frag = gachaData.supportFragments[c.id] || 0;
-      const lb = Math.min(SUPPORT_MAX_LIMIT_BREAK, Number(c.limitBreak) || 0);
-      inv += `${c.emoji} ${c.name}${supportMetaText(c)} Lv${c.level} LB${lb}${frag > 0 ? ` +${frag}F` : ''}\n`;
-    });
-
-    if (list.length > maxShown) inv += `... dan ${list.length - maxShown} lagi\n`;
-    inv += '\n';
+  const sorted = [...cleanedInventory].sort((a, b) => {
+    const rankGap = rarityRank(SUPPORT_RARITY_ORDER, a?.rarity) - rarityRank(SUPPORT_RARITY_ORDER, b?.rarity);
+    if (rankGap !== 0) return rankGap;
+    return normText(a?.name).localeCompare(normText(b?.name));
   });
 
-  inv += `*${EMOJI.total} Total: ${cleanedInventory.length} unique support cards*`;
+  const totalPages = Math.max(1, Math.ceil(sorted.length / SUPPORT_INVENTORY_PAGE_SIZE));
+  const requested = parsePageArg(args?.[0], 1);
+  const page = Math.max(1, Math.min(requested, totalPages));
+  const start = (page - 1) * SUPPORT_INVENTORY_PAGE_SIZE;
+  const slice = sorted.slice(start, start + SUPPORT_INVENTORY_PAGE_SIZE);
+
+  let inv =
+    `*${EMOJI.support} Koleksi Support Card ${EMOJI.support}*\n` +
+    `Page ${page}/${totalPages}\n\n`;
+  slice.forEach((c, idx) => {
+    const frag = gachaData.supportFragments[c.id] || 0;
+    const lb = Math.min(SUPPORT_MAX_LIMIT_BREAK, Number(c.limitBreak) || 0);
+    inv += `${start + idx + 1}. ${c.emoji} ${c.name}${supportMetaText(c)} [${c.rarity}] Lv${c.level} LB${lb}${frag > 0 ? ` +${frag}F` : ''}\n`;
+  });
+  inv += `\n*${EMOJI.total} Total: ${cleanedInventory.length} unique support cards*\n`;
+  inv += `Ketik: !gacha support inventory <page>`;
   return sock.sendMessage(remoteJid, { text: inv }, { quoted: msg });
 }
 
-function handleStats(sock, remoteJid, gachaData, msg) {
+function handleStats(sock, remoteJid, jid, gachaData, msg) {
   const cleanedInventory = sanitizeUmaInventory(gachaData.inventory);
   if (cleanedInventory.length !== gachaData.inventory.length) {
     gachaData.inventory = cleanedInventory;
-    setGacha(msg.key.participant || msg.key.remoteJid, gachaData);
+    setGacha(jid, gachaData);
   }
 
   const totalPulls = gachaData.pulls;
@@ -1068,15 +1155,15 @@ function handleStats(sock, remoteJid, gachaData, msg) {
       `${EMOJI.gacha} Total Pulls: ${totalPulls}\n` +
       `${EMOJI.inventory} Unique Umas: ${totalUnique}\n` +
       `${EMOJI.stats} Avg Pull/Uma: ${avgPerUma}\n` +
-      `${EMOJI.duplicate} Total Fragments: ${totalFragments}`
+      `${EMOJI.duplicate} Total Pieces: ${totalFragments}`
   }, { quoted: msg });
 }
 
-function handleSupportStats(sock, remoteJid, gachaData, msg) {
+function handleSupportStats(sock, remoteJid, jid, gachaData, msg) {
   const cleanedInventory = sanitizeSupportInventory(gachaData.supportInventory);
   if (cleanedInventory.length !== gachaData.supportInventory.length) {
     gachaData.supportInventory = cleanedInventory;
-    setGacha(msg.key.participant || msg.key.remoteJid, gachaData);
+    setGacha(jid, gachaData);
   }
 
   const totalPulls = gachaData.supportPulls;
